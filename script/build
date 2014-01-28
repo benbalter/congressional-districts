@@ -1,0 +1,164 @@
+#! /usr/bin/ruby
+# Source http://www.census.gov/geo/maps-data/data/cbf/cbf_cds.html
+
+require 'rubygems'
+require 'open-uri'
+require 'fileutils'
+require 'json'
+
+ROOT = File.expand_path("../", File.dirname(__FILE__))
+
+CONGRESSES = {
+  103 => 1993,
+  104 => 1995,
+  105 => 1997,
+  106 => 1999,
+  107 => 2001,
+  108 => 2003,
+  109 => 2005,
+  110 => 2007,
+  111 => 2009,
+  113 => 2011
+}
+
+# FIPS code => US Postal Code
+STATES = {
+  "01" => "AL",
+  "02" => "AK",
+  "04" => "AZ",
+  "05" => "AR",
+  "06" => "CA",
+  "08" => "CO",
+  "09" => "CT",
+  "10" => "DE",
+  "11" => "DC",
+  "12" => "FL",
+  "13" => "GA",
+  "15" => "HI",
+  "16" => "ID",
+  "17" => "IL",
+  "18" => "IN",
+  "19" => "IA",
+  "20" => "KS",
+  "21" => "KY",
+  "22" => "LA",
+  "23" => "ME",
+  "24" => "MD",
+  "25" => "MA",
+  "26" => "MI",
+  "27" => "MN",
+  "28" => "MS",
+  "29" => "MO",
+  "30" => "MT",
+  "31" => "NE",
+  "32" => "NV",
+  "33" => "NH",
+  "34" => "NJ",
+  "35" => "NM",
+  "36" => "NY",
+  "37" => "NC",
+  "38" => "ND",
+  "39" => "OH",
+  "40" => "OK",
+  "41" => "OR",
+  "42" => "PA",
+  "44" => "RI",
+  "45" => "SC",
+  "46" => "SD",
+  "47" => "TN",
+  "48" => "TX",
+  "49" => "UT",
+  "50" => "VT",
+  "51" => "VA",
+  "53" => "WA",
+  "54" => "WV",
+  "55" => "WI",
+  "56" => "WY",
+  "60" => "AS",
+  "66" => "GU",
+  "69" => "MP",
+  "72" => "PR",
+  "78" => "VI"
+}
+
+def filename(congress,state)
+  if congress == 113
+    "http://www2.census.gov/geo/tiger/GENZ2012/cd/cb_rd13_us_cd113_500k.zip"
+  elsif congress == 111
+    "http://www2.census.gov/geo/tiger/GENZ2010/gz_2010_#{state}_500_11_500k.zip"
+  else
+    "http://www2.census.gov/geo/tiger/PREVGENZ/cd/cd#{congress}shp/cd#{state}_#{congress}_shp.zip"
+  end
+end
+
+def human_name(congress)
+  if congress == 103
+    "103rd Congress"
+  else
+    "#{congress}th Congress"
+  end
+end
+
+def write(destination, data)
+  File.open(destination, "w") { |file| file.write data.to_json }
+end
+
+def add_and_commit(file, congress, postal_code, district)
+  `git add #{file}`
+  `git commit -m "Update #{postal_code}-#{district} for #{human_name(congress)}" --date="#{CONGRESSES[congress]}-01-03 00:00:00 -0500"`
+end
+
+FileUtils.mkdir_p "#{ROOT}/tmp"
+for congress, year in CONGRESSES
+
+  puts "Processing the #{human_name(congress)}..."
+
+  for fips_code, postal_code in STATES
+
+    puts "  Processing #{postal_code}..."
+
+    # Make directories by state
+    FileUtils.mkdir_p "#{ROOT}/#{postal_code}"
+
+    # Download data from census
+    file = File.expand_path File.basename(filename(congress, fips_code), ".*"), "tmp"
+    `wget --directory-prefix=tmp #{filename(congress, fips_code)}` unless File.exist? "#{file}.zip"
+
+    # Census leaves out some districts randomly, like American Samoa from the 107th Congress, if so, skip
+    next unless File.exist? "#{file}.zip"
+
+    # Unzip
+    `unzip #{file}.zip -d #{file}` unless File.directory? file
+
+    # Convert from shapefile to single, state-wide (or country-wide for 113) geojson file
+    `ogr2ogr -f GeoJSON #{file}/data.geojson #{file}/#{File.basename(file).sub("_shp","")}.shp` unless File.exists? "#{file}/data.geojson"
+
+    # Parse JSON and split each district into its own file
+    data = JSON.parse File.open("#{file}/data.geojson").read
+
+    # For 113th congress, census gives us one lump-sum shapefile... FUN!
+    if congress == 113
+      data["features"].each do |district|
+        fips_code = district["properties"]["STATEFP"]
+        postal_code = STATES[fips_code]
+        district_num = district["properties"]["CD113FP"]
+        puts "    Processing #{postal_code}-#{district_num}..."
+        file = "#{ROOT}/#{postal_code}/#{district_num}.geojson"
+        write(file, district)
+        add_and_commit(file, congress, postal_code, district_num)
+      end
+      break # only need to do 113th once, and it's the last congress so bail
+    # < 113 each state is its own file
+    else
+      data["features"].each do |district|
+        district_num = district["properties"]["CD"]
+        puts "    Processing #{postal_code}-#{district_num}..."
+        file = "#{ROOT}/#{postal_code}/#{district_num}.geojson"
+        write(file, district)
+        add_and_commit(file, congress, postal_code, district_num)
+      end # end district loop
+    end # congressional if block
+  end # end state
+end # end congress
+
+puts "fin."
