@@ -4,7 +4,7 @@
 
 ## Usage
 
-## Viewing a district's history
+### Viewing a district's history
 
 1. Select a state from the list above
 2. Select a district
@@ -12,7 +12,7 @@
 4. Click history
 5. Select a congress to compare changes in that district boundaries to the previous congress, if any
 
-## As an API
+### As an API
 
 Files in this repository follow a predictable file structure and can be treated as a RESTful API.
 
